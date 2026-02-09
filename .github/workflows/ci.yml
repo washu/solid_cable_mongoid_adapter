@@ -58,20 +58,6 @@ jobs:
           - ruby: '3.4'
             rails: '8.1'
 
-    services:
-      mongodb:
-        image: mongo:7
-        options: >-
-          --health-cmd "mongosh --eval 'rs.status()' || mongosh --eval 'rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"localhost:27017\"}]})'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-          --replSet rs0
-        ports:
-          - 27017:27017
-        env:
-          MONGO_INITDB_DATABASE: solid_cable_test
-
     steps:
     - uses: actions/checkout@v3
 
@@ -86,16 +72,13 @@ jobs:
       env:
         RAILS_VERSION: ${{ matrix.rails }}
 
-    - name: Wait for MongoDB
+    - name: Start MongoDB with Replica Set
       run: |
-        for i in {1..30}; do
-          if mongosh --eval "rs.status()" > /dev/null 2>&1; then
-            echo "MongoDB is ready"
-            break
-          fi
-          echo "Waiting for MongoDB..."
-          sleep 2
-        done
+        docker run -d --name mongodb -p 27017:27017 mongo:7 --replSet rs0
+        sleep 5
+        docker exec mongodb mongosh --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})'
+        sleep 2
+        docker exec mongodb mongosh --eval 'rs.status()'
 
     - name: Run tests
       run: bundle exec rspec
