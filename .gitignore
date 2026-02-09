@@ -1,0 +1,38 @@
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+
+# rspec failure tracking
+.rspec_status
+
+# YARD artifacts
+.yardoc
+_yardoc
+doc/
+*.swp
+*.swo
+*~
+
+# Bundler
+Gemfile.lock
+vendor/
+
+# rbenv
+.ruby-version
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
