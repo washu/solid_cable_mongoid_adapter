@@ -31,7 +31,12 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid::Listener do
   subject(:listener) { described_class.new(adapter, event_loop) }
 
   after do
-    listener.shutdown if listener.instance_variable_get(:@running)
+    if defined?(listener) && listener.instance_variable_get(:@running)
+      listener.shutdown
+      # Ensure thread is fully stopped before mocks are cleaned up
+      thread = listener.instance_variable_get(:@thread)
+      thread&.join(1)
+    end
   end
 
   describe "#initialize" do

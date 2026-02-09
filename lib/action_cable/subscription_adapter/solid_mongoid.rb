@@ -265,6 +265,14 @@ module ActionCable
           @resume_token = nil
           @reconnect_attempts = 0
 
+          # Cache config values and collection to avoid accessing mocks from background thread
+          config = @adapter.server.config.cable
+          @reconnect_delay_base = config.fetch("reconnect_delay", 1.0).to_f
+          @max_reconnect_delay = config.fetch("max_reconnect_delay", 60.0).to_f
+          @poll_interval = config.fetch("poll_interval_ms", 500).to_i / 1000.0
+          @batch_limit = config.fetch("poll_batch_limit", 200).to_i
+          @collection = @adapter.get_collection
+
           @thread = Thread.new { listen_loop }
           @thread.name = "solid-cable-mongoid-#{Process.pid}" if @thread.respond_to?(:name=)
           @thread.abort_on_exception = false
@@ -290,23 +298,21 @@ module ActionCable
         #
         # @return [Float] seconds to wait before retry
         def reconnect_delay
-          base = (@adapter.server.config.cable.fetch("reconnect_delay", 1.0)).to_f
-          max = (@adapter.server.config.cable.fetch("max_reconnect_delay", 60.0)).to_f
-          [base * (2**@reconnect_attempts), max].min
+          [@reconnect_delay_base * (2**@reconnect_attempts), @max_reconnect_delay].min
         end
 
         # Polling interval in seconds.
         #
         # @return [Float]
         def poll_interval
-          (@adapter.server.config.cable.fetch("poll_interval_ms", 500)).to_i / 1000.0
+          @poll_interval
         end
 
         # Max documents to fetch per poll.
         #
         # @return [Integer]
         def batch_limit
-          (@adapter.server.config.cable.fetch("poll_batch_limit", 200)).to_i
+          @batch_limit
         end
 
         # Main listener loop that receives broadcasts from MongoDB.
@@ -322,7 +328,7 @@ module ActionCable
                 opts = { max_await_time_ms: 1000 }
                 opts[:resume_after] = @resume_token if @resume_token
 
-                @stream = @adapter.get_collection.watch(pipeline, opts)
+                @stream = @collection.watch(pipeline, opts)
                 enum = @stream.to_enum
 
                 while @running && enum
@@ -391,7 +397,7 @@ module ActionCable
         #
         # @return [void]
         def poll_for_inserts
-          coll = @adapter.get_collection
+          coll = @collection
 
           # Start after current head to avoid replaying history
           @last_seen_id ||= begin
