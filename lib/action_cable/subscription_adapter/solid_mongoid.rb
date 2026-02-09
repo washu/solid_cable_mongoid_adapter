@@ -60,7 +60,7 @@ module ActionCable
       # @param payload [String] the raw message payload (Action Cable provides a JSON string)
       # @return [Boolean] true if successful, false on error
       def broadcast(channel, payload)
-        get_collection.insert_one(
+        collection.insert_one(
           {
             channel: channel.to_s,
             message: payload,
@@ -72,7 +72,7 @@ module ActionCable
       rescue Mongo::Error => e
         logger.error "SolidCableMongoid: broadcast error (#{e.class}): #{e.message}"
         false
-      rescue => e
+      rescue StandardError => e
         logger.error "SolidCableMongoid: unexpected broadcast error (#{e.class}): #{e.message}"
         false
       end
@@ -111,11 +111,11 @@ module ActionCable
       def validate_replica_set!
         return unless require_replica_set?
 
-        unless replica_set_configured?
-          logger.warn "SolidCableMongoid: MongoDB is not configured as a replica set. " \
-                      "Change Streams are unavailable; falling back to polling mode. " \
-                      "Set require_replica_set: false in cable.yml to disable this check."
-        end
+        return if replica_set_configured?
+
+        logger.warn "SolidCableMongoid: MongoDB is not configured as a replica set. " \
+                    "Change Streams are unavailable; falling back to polling mode. " \
+                    "Set require_replica_set: false in cable.yml to disable this check."
       end
 
       # Check if MongoDB is configured as a replica set.
@@ -123,10 +123,18 @@ module ActionCable
       # @return [Boolean] true if replica set is configured
       def replica_set_configured?
         client = Mongoid.default_client
-        hello = client.database.command({ hello: 1 }).first rescue nil
-        hello ||= client.database.command({ ismaster: 1 }).first rescue nil
+        hello = begin
+          client.database.command({ hello: 1 }).first
+        rescue StandardError
+          nil
+        end
+        hello ||= begin
+          client.database.command({ ismaster: 1 }).first
+        rescue StandardError
+          nil
+        end
         !!hello&.[]("setName")
-      rescue => e
+      rescue StandardError => e
         logger.warn "SolidCableMongoid: unable to check replica set status (#{e.class}): #{e.message}"
         false
       end
@@ -182,7 +190,7 @@ module ActionCable
             logger.warn "SolidCableMongoid: failed to create channel index: #{e.message}"
           end
         end
-      rescue => e
+      rescue StandardError => e
         logger.error "SolidCableMongoid: failed to ensure collection state: #{e.message}"
       end
 
@@ -192,7 +200,7 @@ module ActionCable
       # Not memoized to avoid issues with forking (e.g., Passenger, Puma cluster mode).
       #
       # @return [Mongo::Collection]
-      def get_collection
+      def collection
         Mongoid.default_client.database.collection(collection_name)
       end
 
@@ -227,9 +235,7 @@ module ActionCable
       # The Action Cable server instance.
       #
       # @return [ActionCable::Server::Base]
-      def server
-        @server
-      end
+      attr_reader :server
 
       # The singleton listener for this server process. Lazily instantiated and
       # synchronized through the server's mutex.
@@ -271,7 +277,7 @@ module ActionCable
           @max_reconnect_delay = config.fetch("max_reconnect_delay", 60.0).to_f
           @poll_interval = config.fetch("poll_interval_ms", 500).to_i / 1000.0
           @batch_limit = config.fetch("poll_batch_limit", 200).to_i
-          @collection = @adapter.get_collection
+          @collection = @adapter.collection
 
           @thread = Thread.new { listen_loop }
           @thread.name = "solid-cable-mongoid-#{Process.pid}" if @thread.respond_to?(:name=)
@@ -287,9 +293,9 @@ module ActionCable
         def shutdown
           @running = false
           close_stream
-          if @thread&.alive?
-            @thread.join(5) || @thread.kill
-          end
+          return unless @thread&.alive?
+
+          @thread.join(5) || @thread.kill
         end
 
         private
@@ -304,22 +310,18 @@ module ActionCable
         # Polling interval in seconds.
         #
         # @return [Float]
-        def poll_interval
-          @poll_interval
-        end
+        attr_reader :poll_interval
 
         # Max documents to fetch per poll.
         #
         # @return [Integer]
-        def batch_limit
-          @batch_limit
-        end
+        attr_reader :batch_limit
 
         # Main listener loop that receives broadcasts from MongoDB.
         #
         # @return [void]
         def listen_loop
-          pipeline = [{ '$match' => { 'operationType' => 'insert' } }]
+          pipeline = [{ "$match" => { "operationType" => "insert" } }]
 
           while @running
             begin
@@ -344,7 +346,7 @@ module ActionCable
                 poll_for_inserts
               end
             rescue Mongo::Error::OperationFailure => e
-              unless e.message.include?('operation exceeded time limit')
+              unless e.message.include?("operation exceeded time limit")
                 @adapter.logger.warn "SolidCableMongoid: operation error (#{e.class}): #{e.message}"
                 @reconnect_attempts += 1
               end
@@ -358,8 +360,10 @@ module ActionCable
               @adapter.logger.debug "SolidCableMongoid: stream unavailable (#{e.message})"
               @reconnect_attempts += 1
               sleep_with_backoff
-            rescue => e
-              @adapter.logger.error "SolidCableMongoid: unexpected listener error (#{e.class}): #{e.message}\n#{Array(e.backtrace).take(10).join("\n")}"
+            rescue StandardError => e
+              backtrace = Array(e.backtrace).take(10).join("\n")
+              msg = "SolidCableMongoid: unexpected listener error (#{e.class}): #{e.message}\n#{backtrace}"
+              @adapter.logger.error msg
               @reconnect_attempts += 1
               sleep_with_backoff
             ensure
@@ -380,7 +384,7 @@ module ActionCable
         # @return [void]
         def close_stream
           @stream&.close
-        rescue => e
+        rescue StandardError => e
           @adapter.logger.debug "SolidCableMongoid: stream close warning (#{e.class}): #{e.message}"
         ensure
           @stream = nil
@@ -411,7 +415,7 @@ module ActionCable
           interval = poll_interval
 
           while @running && !change_stream_supported?
-            filter = @last_seen_id ? { '_id' => { '$gt' => @last_seen_id } } : {}
+            filter = @last_seen_id ? { "_id" => { "$gt" => @last_seen_id } } : {}
             docs = coll.find(filter)
                        .sort({ _id: 1 })
                        .limit(batch_limit)
@@ -439,7 +443,7 @@ module ActionCable
           return unless @subscribers.key?(channel)
 
           broadcast(channel, message)
-        rescue => e
+        rescue StandardError => e
           @adapter.logger.error "SolidCableMongoid: failed to handle insert (#{e.class}): #{e.message}"
         end
       end

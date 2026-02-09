@@ -25,9 +25,21 @@ Metrics/BlockLength:
 
 Metrics/MethodLength:
   Max: 25
+  Exclude:
+    - 'lib/action_cable/subscription_adapter/solid_mongoid.rb'
 
 Metrics/ClassLength:
   Max: 250
 
 Metrics/AbcSize:
   Max: 25
+  Exclude:
+    - 'lib/action_cable/subscription_adapter/solid_mongoid.rb'
+
+Metrics/CyclomaticComplexity:
+  Exclude:
+    - 'lib/action_cable/subscription_adapter/solid_mongoid.rb'
+
+Metrics/PerceivedComplexity:
+  Exclude:
+    - 'lib/action_cable/subscription_adapter/solid_mongoid.rb'

@@ -9,7 +9,8 @@ Gem::Specification.new do |spec|
   spec.email = ["sscotto@gmail.com"]
 
   spec.summary = "MongoDB adapter for Action Cable using Mongoid"
-  spec.description = "A production-ready Action Cable subscription adapter that uses MongoDB (via Mongoid) as a durable, cross-process broadcast backend with Change Streams support"
+  spec.description = "A production-ready Action Cable subscription adapter that uses MongoDB (via Mongoid) " \
+                     "as a durable, cross-process broadcast backend with Change Streams support"
   spec.homepage = "https://github.com/washu/solid_cable_mongoid_adapter"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 2.7.0"
@@ -17,6 +18,7 @@ Gem::Specification.new do |spec|
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata["rubygems_mfa_required"] = "true"
 
   # Specify which files should be added to the gem when it is released.
   spec.files = Dir.chdir(__dir__) do
@@ -31,14 +33,7 @@ Gem::Specification.new do |spec|
 
   # Runtime dependencies
   spec.add_dependency "actioncable", ">= 7.0", "< 9.0"
-  spec.add_dependency "mongoid", ">= 7.0", "< 10.0"
   spec.add_dependency "mongo", ">= 2.18", "< 3.0"
-
-  # Development dependencies
-  spec.add_development_dependency "rake", "~> 13.0"
-  spec.add_development_dependency "rspec", "~> 3.0"
-  spec.add_development_dependency "rubocop", "~> 1.21"
-  spec.add_development_dependency "rubocop-rake", "~> 0.6"
-  spec.add_development_dependency "rubocop-rspec", "~> 2.0"
+  spec.add_dependency "mongoid", ">= 7.0", "< 10.0"
   # should add a dep for rails prehaps?
 end

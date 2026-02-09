@@ -178,8 +178,8 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid::Listener do
 
   describe "change stream handling" do
     it "attempts to watch change streams" do
-      collection = adapter.get_collection
-      allow(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      allow(adapter).to receive(:collection).and_return(collection)
 
       # Simulate change stream creation
       stream = double("stream")

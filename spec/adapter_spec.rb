@@ -58,8 +58,8 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
 
   describe "#broadcast" do
     it "inserts a document into MongoDB" do
-      collection = adapter.get_collection
-      expect(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      expect(adapter).to receive(:collection).and_return(collection)
       expect(collection).to receive(:insert_one).with(hash_including(channel: "test", message: "payload"))
       adapter.broadcast("test", "payload")
     end
@@ -69,8 +69,8 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
     end
 
     it "returns false on error" do
-      collection = adapter.get_collection
-      allow(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(Mongo::Error::OperationFailure.new("test"))
       expect(adapter.broadcast("test", "payload")).to be false
     end
@@ -163,9 +163,9 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
     end
   end
 
-  describe "#get_collection" do
+  describe "#collection" do
     it "returns a MongoDB collection" do
-      collection = adapter.get_collection
+      collection = adapter.collection
       expect(collection).to be_a(Mongo::Collection)
       expect(collection.name).to eq("test_messages")
     end
@@ -179,30 +179,30 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
     end
 
     it "creates collection if needed" do
-      collection = adapter.get_collection
+      collection = adapter.collection
       expect(collection).to be_a(Mongo::Collection)
     end
   end
 
   describe "broadcast error handling" do
     it "returns false on unexpected errors" do
-      collection = adapter.get_collection
-      allow(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(StandardError.new("unexpected"))
       expect(adapter.broadcast("test", "payload")).to be false
     end
 
     it "logs MongoDB errors" do
-      collection = adapter.get_collection
-      allow(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(Mongo::Error::OperationFailure.new("test"))
       expect(server.logger).to receive(:error).with(/broadcast error/)
       adapter.broadcast("test", "payload")
     end
 
     it "logs unexpected errors" do
-      collection = adapter.get_collection
-      allow(adapter).to receive(:get_collection).and_return(collection)
+      collection = adapter.collection
+      allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(StandardError.new("unexpected"))
       expect(server.logger).to receive(:error).with(/unexpected broadcast error/)
       adapter.broadcast("test", "payload")

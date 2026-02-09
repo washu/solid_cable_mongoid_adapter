@@ -27,7 +27,7 @@ module CommonSubscriptionAdapterTest
 
     yield queue
   ensure
-    adapter.unsubscribe(channel, callback) if adapter
+    adapter&.unsubscribe(channel, callback)
   end
 
   # Wait for a condition with timeout
@@ -36,6 +36,7 @@ module CommonSubscriptionAdapterTest
     loop do
       return if yield
       raise "Timeout waiting for condition" if Time.now - start > timeout
+
       sleep 0.01
     end
   end

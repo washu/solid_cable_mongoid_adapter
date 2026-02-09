@@ -84,10 +84,10 @@ RSpec.describe "SolidMongoid Subscription Adapter", type: :subscription_adapter 
   end
 
   it "handles multiple subscriptions and unsubscriptions" do
-    callbacks = 3.times.map { ->(msg) { } }
+    callbacks = 3.times.map { ->(msg) {} }
     queues = 3.times.map { Queue.new }
 
-    callbacks.each_with_index do |callback, i|
+    callbacks.each_with_index do |_callback, i|
       wrapped_callback = ->(msg) { queues[i] << msg }
       @adapter.subscribe("multi_channel", wrapped_callback, -> {})
     end

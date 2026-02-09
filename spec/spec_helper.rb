@@ -45,6 +45,7 @@ def wait_for_mongodb(host, timeout: 60)
   start_time = Time.now
   until mongodb_running?(host)
     raise "MongoDB failed to start within #{timeout} seconds" if Time.now - start_time > timeout
+
     sleep 1
   end
   puts "MongoDB is ready"
