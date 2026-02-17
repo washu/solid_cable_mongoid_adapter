@@ -312,6 +312,6 @@ The gem is available as open source under the terms of the [MIT License](https:/
 
 ## Credits
 
-Created and maintained by [Aztec Software](https://aztecsoftware.com).
+Created and maintained by [Sal Scotto]
 
 Based on the solid_cable pattern and adapted for MongoDB with production-grade features.
