@@ -60,21 +60,29 @@ module ActionCable
       # @param payload [String] the raw message payload (Action Cable provides a JSON string)
       # @return [Boolean] true if successful, false on error
       def broadcast(channel, payload)
-        now = Time.now.utc
-        collection.insert_one(
-          {
-            channel: channel.to_s,
-            message: payload,
-            created_at: now,
-            _expires: now + expiration
-          }
-        )
+        ActiveSupport::Notifications.instrument("broadcast.solid_cable_mongoid",
+                                                channel: channel, size: payload.bytesize) do
+          now = Time.now.utc
+          collection.insert_one(
+            {
+              channel: channel.to_s,
+              message: payload,
+              created_at: now,
+              _expires: now + expiration
+            },
+            write_concern: { w: write_concern_level }
+          )
+        end
         true
       rescue Mongo::Error => e
         logger.error "SolidCableMongoid: broadcast error (#{e.class}): #{e.message}"
+        ActiveSupport::Notifications.instrument("broadcast_error.solid_cable_mongoid",
+                                                channel: channel, error: e.class.name)
         false
       rescue StandardError => e
         logger.error "SolidCableMongoid: unexpected broadcast error (#{e.class}): #{e.message}"
+        ActiveSupport::Notifications.instrument("broadcast_error.solid_cable_mongoid",
+                                                channel: channel, error: e.class.name)
         false
       end
 
@@ -146,13 +154,8 @@ module ActionCable
       def ensure_collection_state
         db = Mongoid.default_client.database
 
-        # 1. Ensure collection exists
-        unless db.collection_names.include?(collection_name)
-          db.create_collection(collection_name)
-          logger.info "SolidCableMongoid: created collection #{collection_name.inspect}"
-        end
-
-        coll = db.collection(collection_name)
+        # 1. Get or create collection (created automatically on first write)
+        coll = db[collection_name]
 
         # 2. Create TTL index for automatic message expiration
         begin
@@ -226,6 +229,13 @@ module ActionCable
         @server.config.cable.fetch("require_replica_set", true)
       end
 
+      # Write concern level for broadcast operations.
+      #
+      # @return [Integer] Write concern level (0 = fire-and-forget, 1 = acknowledge, 2+ = replicas)
+      def write_concern_level
+        @server.config.cable.fetch("write_concern", 1).to_i
+      end
+
       # The logger from the Action Cable server.
       #
       # @return [Logger]
@@ -271,6 +281,8 @@ module ActionCable
           @stream = nil
           @resume_token = nil
           @reconnect_attempts = 0
+          @restart_stream = false
+          @stream_mutex = Mutex.new
 
           # Cache config values and collection to avoid accessing mocks from background thread
           config = @adapter.server.config.cable
@@ -290,6 +302,25 @@ module ActionCable
           @event_loop.post { super }
         end
 
+        # Add a subscriber and restart stream with updated channel filter.
+        def add_subscriber(channel, callback, success_callback = nil)
+          super
+          ActiveSupport::Notifications.instrument("subscribe.solid_cable_mongoid",
+                                                  channel: channel,
+                                                  total_channels: @subscribers.keys.size)
+          request_stream_restart
+        end
+
+        # Remove a subscriber and restart stream with updated channel filter.
+        def remove_subscriber(channel, callback)
+          super
+          ActiveSupport::Notifications.instrument("unsubscribe.solid_cable_mongoid",
+                                                  channel: channel,
+                                                  total_channels: @subscribers.keys.size)
+          # Only restart if no more subscribers for this channel
+          request_stream_restart unless @subscribers.key?(channel)
+        end
+
         # Graceful shutdown with configurable timeout.
         def shutdown
           @running = false
@@ -300,6 +331,47 @@ module ActionCable
         end
 
         private
+
+        # Request a stream restart with updated channel filters.
+        # Thread-safe and non-blocking.
+        #
+        # @return [void]
+        def request_stream_restart
+          @stream_mutex.synchronize { @restart_stream = true }
+        end
+
+        # Check if a stream restart has been requested.
+        #
+        # @return [Boolean]
+        def restart_requested?
+          @stream_mutex.synchronize { @restart_stream }
+        end
+
+        # Clear the restart flag.
+        #
+        # @return [void]
+        def clear_restart_flag
+          @stream_mutex.synchronize { @restart_stream = false }
+        end
+
+        # Build the Change Stream pipeline with channel filtering.
+        # Filters to only receive inserts for channels this process subscribes to.
+        #
+        # @return [Array<Hash>] MongoDB aggregation pipeline
+        def build_pipeline
+          subscribed_channels = @subscribers.keys
+
+          if subscribed_channels.empty?
+            # No subscribers yet, watch for inserts only
+            [{ "$match" => { "operationType" => "insert" } }]
+          else
+            # Filter by subscribed channels at MongoDB level for performance
+            [
+              { "$match" => { "operationType" => "insert" } },
+              { "$match" => { "fullDocument.channel" => { "$in" => subscribed_channels } } }
+            ]
+          end
+        end
 
         # Calculate reconnect delay with exponential backoff.
         #
@@ -322,11 +394,12 @@ module ActionCable
         #
         # @return [void]
         def listen_loop
-          pipeline = [{ "$match" => { "operationType" => "insert" } }]
-
           while @running
             begin
               if change_stream_supported?
+                # Build pipeline with current channel subscriptions for filtering
+                pipeline = build_pipeline
+
                 # Change Stream path (replica set / sharded)
                 opts = { max_await_time_ms: 1000 }
                 opts[:resume_after] = @resume_token if @resume_token
@@ -334,13 +407,23 @@ module ActionCable
                 @stream = @collection.watch(pipeline, opts)
                 enum = @stream.to_enum
 
-                while @running && enum
+                @adapter.logger.debug "SolidCableMongoid: watching #{@subscribers.keys.size} channel(s)"
+
+                while @running && enum && !restart_requested?
                   doc = enum.try_next
                   next unless doc # nil when no event yet
 
                   handle_insert_doc(doc["fullDocument"] || {})
                   @resume_token = @stream.resume_token
                   @reconnect_attempts = 0 # Reset on successful iteration
+                end
+
+                # Handle stream restart request
+                if restart_requested?
+                  @adapter.logger.debug "SolidCableMongoid: restarting stream with updated channel filter"
+                  clear_restart_flag
+                  close_stream
+                  next # Restart loop with new pipeline
                 end
               else
                 # Standalone fallback: polling
@@ -443,9 +526,15 @@ module ActionCable
           message = full["message"]
           return unless @subscribers.key?(channel)
 
-          broadcast(channel, message)
+          ActiveSupport::Notifications.instrument("message_received.solid_cable_mongoid",
+                                                  channel: channel,
+                                                  subscriber_count: @subscribers[channel]&.size || 0) do
+            broadcast(channel, message)
+          end
         rescue StandardError => e
           @adapter.logger.error "SolidCableMongoid: failed to handle insert (#{e.class}): #{e.message}"
+          ActiveSupport::Notifications.instrument("message_error.solid_cable_mongoid",
+                                                  channel: channel, error: e.class.name)
         end
       end
     end

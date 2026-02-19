@@ -154,6 +154,130 @@ export POLL_BATCH_LIMIT=200
 | `poll_interval_ms` | Integer | `500` | Polling interval when Change Streams unavailable |
 | `poll_batch_limit` | Integer | `200` | Max messages fetched per poll iteration |
 | `require_replica_set` | Boolean | `true` | Enforce replica set requirement |
+| `write_concern` | Integer | `1` | MongoDB write concern (0=fire-and-forget, 1=acknowledged, 2+=replicas) |
+
+### Write Concern Configuration
+
+The `write_concern` option controls MongoDB's write acknowledgment behavior:
+
+**write_concern: 1 (Default - Recommended)**
+- MongoDB acknowledges writes
+- Guarantees message persistence
+- Throughput: ~540 msg/sec
+- **Use for**: Production, critical messages, reliable delivery
+
+**write_concern: 0 (High-Performance)**
+- Fire-and-forget, no acknowledgment
+- 4-9x faster throughput (~2000-5000 msg/sec)
+- **Trade-off**: Silent failures, potential message loss
+- **Use for**: High-volume ephemeral data (chat, presence, typing indicators)
+
+**Example Configuration:**
+
+```yaml
+# Conservative (default) - guaranteed delivery
+production:
+  adapter: solid_mongoid
+  write_concern: 1  # Wait for acknowledgment
+
+# High-performance - ephemeral messages
+production_high_volume:
+  adapter: solid_mongoid
+  write_concern: 0  # Fire-and-forget
+  # ⚠️ Warning: Message loss possible during failures
+```
+
+**Benchmark Comparison:**
+
+| Write Concern | Throughput | Latency | Use Case |
+|---------------|------------|---------|----------|
+| w=1 (default) | ~540 msg/sec | ~1.8ms | Critical messages, guaranteed delivery |
+| w=0 (fast) | ~2000+ msg/sec | ~0.3ms | Chat, presence, ephemeral updates |
+
+See [Benchmark 7](#benchmarks) for detailed performance comparison.
+
+## Performance
+
+### Benchmarks
+
+Run the included benchmark suite to measure performance on your system:
+
+**With Docker (Recommended):**
+```bash
+# Automatically starts MongoDB replica set, runs benchmarks, and cleans up
+./benchmark/run_benchmark.sh
+```
+
+**Manual (requires MongoDB replica set on localhost:27017):**
+```bash
+bundle exec ruby benchmark/benchmark.rb
+```
+
+**Typical Results** (M1 Mac, MongoDB 7.0, local replica set):
+
+| Metric | Value |
+|--------|-------|
+| Broadcast latency (100B) | ~1-2ms avg, <3ms p95 |
+| Broadcast latency (1KB) | ~2ms avg, <4ms p95 |
+| Broadcast latency (10KB) | ~2-3ms avg, <4ms p95 |
+| Broadcast latency (100KB) | ~4-5ms avg, <6ms p95 |
+| Throughput (10k messages) | 500-600 messages/sec |
+| Throughput (100k messages) | 400-500 messages/sec (optional test) |
+| Subscribe/Unsubscribe | <1ms |
+| Instrumentation overhead | ~2ms per event |
+
+**High-Volume Test:**
+```bash
+# Run with 100k messages (takes 2-5 minutes)
+BENCHMARK_HIGH_VOLUME=true ./benchmark/run_benchmark.sh
+```
+
+**Channel Filtering Impact:**
+
+| Scenario | Without Filtering | With Filtering | Improvement |
+|----------|------------------|----------------|-------------|
+| 100 channels, subscribe to 10 | 100% traffic | 10% traffic | 90% reduction |
+| 1000 channels, subscribe to 50 | 100% traffic | 5% traffic | 95% reduction |
+
+### Monitoring with ActiveSupport::Notifications
+
+The adapter emits instrumentation events that you can subscribe to:
+
+```ruby
+# config/initializers/cable_monitoring.rb
+ActiveSupport::Notifications.subscribe("broadcast.solid_cable_mongoid") do |name, start, finish, id, payload|
+  duration = (finish - start) * 1000
+  Rails.logger.info "Broadcast to #{payload[:channel]}: #{duration.round(2)}ms (#{payload[:size]} bytes)"
+
+  # Send to your metrics system
+  StatsD.histogram("cable.broadcast.duration", duration, tags: ["channel:#{payload[:channel]}"])
+end
+
+ActiveSupport::Notifications.subscribe("message_received.solid_cable_mongoid") do |name, start, finish, id, payload|
+  duration = (finish - start) * 1000
+  Rails.logger.info "Message received on #{payload[:channel]}: #{duration.round(2)}ms, " \
+                    "#{payload[:subscriber_count]} subscribers"
+end
+
+ActiveSupport::Notifications.subscribe("subscribe.solid_cable_mongoid") do |_name, _start, _finish, _id, payload|
+  Rails.logger.info "Subscribed to #{payload[:channel]} (#{payload[:total_channels]} total channels)"
+  StatsD.increment("cable.subscriptions", tags: ["channel:#{payload[:channel]}"])
+end
+
+ActiveSupport::Notifications.subscribe("broadcast_error.solid_cable_mongoid") do |_name, _start, _finish, _id, payload|
+  Rails.logger.error "Broadcast error on #{payload[:channel]}: #{payload[:error]}"
+  StatsD.increment("cable.errors", tags: ["type:broadcast", "error:#{payload[:error]}"])
+end
+```
+
+**Available Events:**
+
+- `broadcast.solid_cable_mongoid` - Message broadcast (payload: `channel`, `size`)
+- `message_received.solid_cable_mongoid` - Message delivered to subscribers (payload: `channel`, `subscriber_count`)
+- `subscribe.solid_cable_mongoid` - Channel subscription (payload: `channel`, `total_channels`)
+- `unsubscribe.solid_cable_mongoid` - Channel unsubscription (payload: `channel`, `total_channels`)
+- `broadcast_error.solid_cable_mongoid` - Broadcast failure (payload: `channel`, `error`)
+- `message_error.solid_cable_mongoid` - Message delivery failure (payload: `channel`, `error`)
 
 ## Production Deployment
 

@@ -60,7 +60,10 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
     it "inserts a document into MongoDB" do
       collection = adapter.collection
       expect(adapter).to receive(:collection).and_return(collection)
-      expect(collection).to receive(:insert_one).with(hash_including(channel: "test", message: "payload"))
+      expect(collection).to receive(:insert_one).with(
+        hash_including(channel: "test", message: "payload"),
+        hash_including(write_concern: { w: 1 })
+      )
       adapter.broadcast("test", "payload")
     end
 
