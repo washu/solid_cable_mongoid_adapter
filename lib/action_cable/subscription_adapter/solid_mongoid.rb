@@ -60,12 +60,13 @@ module ActionCable
       # @param payload [String] the raw message payload (Action Cable provides a JSON string)
       # @return [Boolean] true if successful, false on error
       def broadcast(channel, payload)
+        now = Time.now.utc
         collection.insert_one(
           {
             channel: channel.to_s,
             message: payload,
-            created_at: Time.now.utc,
-            _expires: Time.now.utc + expiration
+            created_at: now,
+            _expires: now + expiration
           }
         )
         true
