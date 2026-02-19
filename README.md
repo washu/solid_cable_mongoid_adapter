@@ -97,6 +97,7 @@ production:
   poll_interval_ms: 500                       # polling fallback interval, default: 500
   poll_batch_limit: 200                       # max messages per poll, default: 200
   require_replica_set: true                   # enforce replica set, default: true
+  write_concern: 1                            # set rite concern for broadcasts, 0, 1, etc..
 
 development:
   adapter: solid_mongoid
