@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0.0] - 2025-02-25
+
 ### Added
 - **Dynamic Channel Filtering**: MongoDB-level filtering reduces network traffic by 50-95% in multi-channel scenarios
 - **ActiveSupport::Notifications Integration**: Six instrumentation events for monitoring and metrics
