@@ -33,7 +33,7 @@ rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, SocketError
 end
 
 def start_mongodb_container
-  system("docker run -d --name solid_cable_test_mongo -p 27017:27017 mongo:7 --replSet rs0", out: File::NULL, err: File::NULL)
+  system("docker run -d --name solid_cable_test_mongo -p 27017:27017 mongo:8 --replSet rs0", out: File::NULL, err: File::NULL)
   sleep 2 # Give container time to start
   # Initialize replica set with explicit localhost hostname to avoid container hostname issues
   init_config = '{_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]}'
