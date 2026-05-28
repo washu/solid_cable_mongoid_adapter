@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Memoize MongoDB replica set check to avoid repeated `hello`/`ismaster` commands; topology is checked once per process.
+- Improve listener resilience and performance: avoid sleeping on expected Change Stream timeouts, guard nil streams, and synchronize access to subscriber data when building pipelines and dispatching messages.
+- `validate_replica_set!` now raises `ReplicaSetRequiredError` when `require_replica_set` is enabled (previously only logged a warning).
+- Remove redundant `logger` / `attr_reader :server` overrides that are now provided by Action Cable's `SubscriptionAdapter::Base`.
+- Update specs to fix flaky tests and reflect the new replica set validation behavior.
+- Update `.rubocop.yml` target Ruby version and fix a README typo.
+- Benchmarks executed locally; results indicate ~1.6k msg/s (w=1) and ~5k msg/s (w=0) on the benchmark host — see `benchmark/` for details.
+
+
 ## [1.1.0.0] - 2025-02-25
 
 ### Added
