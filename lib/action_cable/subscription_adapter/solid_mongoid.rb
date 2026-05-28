@@ -128,9 +128,12 @@ module ActionCable
       end
 
       # Check if MongoDB is configured as a replica set.
+      # Result is memoized after the first check — topology does not change at runtime.
       #
       # @return [Boolean] true if replica set is configured
       def replica_set_configured?
+        return @replica_set_configured unless @replica_set_configured.nil?
+
         client = Mongoid.default_client
         hello = begin
           client.database.command({ hello: 1 }).first
@@ -142,10 +145,10 @@ module ActionCable
         rescue StandardError
           nil
         end
-        !!hello&.[]("setName")
+        @replica_set_configured = !!hello&.[]("setName")
       rescue StandardError => e
         logger.warn "SolidCableMongoid: unable to check replica set status (#{e.class}): #{e.message}"
-        false
+        @replica_set_configured = false
       end
 
       # Ensure the MongoDB collection and indexes are in the expected state.
@@ -236,17 +239,6 @@ module ActionCable
         @server.config.cable.fetch("write_concern", 1).to_i
       end
 
-      # The logger from the Action Cable server.
-      #
-      # @return [Logger]
-      def logger
-        @server.logger
-      end
-
-      # The Action Cable server instance.
-      #
-      # @return [ActionCable::Server::Base]
-      attr_reader :server
 
       # The singleton listener for this server process. Lazily instantiated and
       # synchronized through the server's mutex.
