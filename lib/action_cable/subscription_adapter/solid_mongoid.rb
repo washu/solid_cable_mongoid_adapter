@@ -239,7 +239,6 @@ module ActionCable
         @server.config.cable.fetch("write_concern", 1).to_i
       end
 
-
       # The singleton listener for this server process. Lazily instantiated and
       # synchronized through the server's mutex.
       #
