@@ -36,6 +36,7 @@ Mongoid.configure do |config|
 end
 
 # Mock ActionCable Server
+# rubocop:disable Style/OneClassPerFile
 class MockServer
   attr_reader :logger, :config, :event_loop, :mutex
 
@@ -69,7 +70,7 @@ class MockConfig
     }
   end
 end
-
+# rubocop:enable Style/OneClassPerFile
 # Setup
 puts "=== SolidCableMongoidAdapter Performance Benchmark ==="
 puts "MongoDB: #{ENV.fetch("MONGODB_URI", "mongodb://localhost:27017/solid_cable_benchmark")}"
