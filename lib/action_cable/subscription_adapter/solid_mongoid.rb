@@ -74,13 +74,9 @@ module ActionCable
           )
         end
         true
-      rescue Mongo::Error => e
-        logger.error "SolidCableMongoid: broadcast error (#{e.class}): #{e.message}"
-        ActiveSupport::Notifications.instrument("broadcast_error.solid_cable_mongoid",
-                                                channel: channel, error: e.class.name)
-        false
       rescue StandardError => e
-        logger.error "SolidCableMongoid: unexpected broadcast error (#{e.class}): #{e.message}"
+        kind = e.is_a?(Mongo::Error) ? "broadcast error" : "unexpected broadcast error"
+        logger.error "SolidCableMongoid: #{kind} (#{e.class}): #{e.message}"
         ActiveSupport::Notifications.instrument("broadcast_error.solid_cable_mongoid",
                                                 channel: channel, error: e.class.name)
         false
@@ -293,23 +289,34 @@ module ActionCable
           @event_loop.post { super }
         end
 
-        # Add a subscriber and restart stream with updated channel filter.
+        # Add a subscriber. Instrumentation fires per-subscribe; stream restart
+        # is triggered by `add_channel` (only when a brand new channel is joined).
         def add_subscriber(channel, callback, success_callback = nil)
           super
           ActiveSupport::Notifications.instrument("subscribe.solid_cable_mongoid",
                                                   channel: channel,
-                                                  total_channels: @subscribers.keys.size)
-          request_stream_restart
+                                                  total_channels: channels_snapshot.size)
         end
 
-        # Remove a subscriber and restart stream with updated channel filter.
+        # Remove a subscriber. Stream restart is triggered by `remove_channel`
+        # (only when the last subscriber leaves a channel).
         def remove_subscriber(channel, callback)
           super
           ActiveSupport::Notifications.instrument("unsubscribe.solid_cable_mongoid",
                                                   channel: channel,
-                                                  total_channels: @subscribers.keys.size)
-          # Only restart if no more subscribers for this channel
-          request_stream_restart unless @subscribers.key?(channel)
+                                                  total_channels: channels_snapshot.size)
+        end
+
+        # Called by SubscriberMap when a brand new channel is added (runs under @sync).
+        def add_channel(channel, on_success)
+          super
+          request_stream_restart
+        end
+
+        # Called by SubscriberMap when the last subscriber leaves a channel (runs under @sync).
+        def remove_channel(channel)
+          super
+          request_stream_restart
         end
 
         # Graceful shutdown with configurable timeout.
@@ -345,12 +352,20 @@ module ActionCable
           @stream_mutex.synchronize { @restart_stream = false }
         end
 
+        # Snapshot the subscribed channel list under SubscriberMap's mutex.
+        # Safe to read from the background listener thread.
+        #
+        # @return [Array<String>]
+        def channels_snapshot
+          @sync.synchronize { @subscribers.keys }
+        end
+
         # Build the Change Stream pipeline with channel filtering.
         # Filters to only receive inserts for channels this process subscribes to.
         #
         # @return [Array<Hash>] MongoDB aggregation pipeline
         def build_pipeline
-          subscribed_channels = @subscribers.keys
+          subscribed_channels = channels_snapshot
 
           if subscribed_channels.empty?
             # No subscribers yet, watch for inserts only
@@ -398,7 +413,7 @@ module ActionCable
                 @stream = @collection.watch(pipeline, opts)
                 enum = @stream.to_enum
 
-                @adapter.logger.debug "SolidCableMongoid: watching #{@subscribers.keys.size} channel(s)"
+                @adapter.logger.debug "SolidCableMongoid: watching #{channels_snapshot.size} channel(s)"
 
                 while @running && enum && !restart_requested?
                   doc = enum.try_next
@@ -515,11 +530,14 @@ module ActionCable
         def handle_insert_doc(full)
           channel = full["channel"].to_s
           message = full["message"]
-          return unless @subscribers.key?(channel)
+          subscriber_count = @sync.synchronize do
+            @subscribers.key?(channel) ? @subscribers[channel].size : 0
+          end
+          return if subscriber_count.zero?
 
           ActiveSupport::Notifications.instrument("message_received.solid_cable_mongoid",
                                                   channel: channel,
-                                                  subscriber_count: @subscribers[channel]&.size || 0) do
+                                                  subscriber_count: subscriber_count) do
             broadcast(channel, message)
           end
         rescue StandardError => e

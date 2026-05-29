@@ -5,49 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2025-02-09
-
-### Added
-- Initial release of SolidCableMongoidAdapter
-- MongoDB Change Streams support for real-time message delivery
-- Automatic TTL-based message expiration
-- Replica set requirement validation
-- Exponential backoff for reconnection attempts
-- Resume token support for continuity across reconnections
-- Fallback polling mode for standalone MongoDB
-- Comprehensive logging and error handling
-- Thread-safe listener implementation
-- Rails 7+ and Rails 8+ compatibility
-- Production-grade code quality and documentation
-
-### Features
-- Channel-based subscription management
-- Configurable message expiration (TTL)
-- Configurable reconnection delays with exponential backoff
-- Configurable polling parameters for fallback mode
-- Automatic collection and index creation
-- Fork-safe operation (Passenger, Puma cluster mode)
-
-### Configuration Options
-- `collection_name`: MongoDB collection name
-- `expiration`: Message TTL in seconds
-- `reconnect_delay`: Initial retry delay
-- `max_reconnect_delay`: Maximum retry delay
-- `poll_interval_ms`: Polling interval
-- `poll_batch_limit`: Max messages per poll
-- `require_replica_set`: Enforce replica set requirement
-
 ## [Unreleased]
+
+### Planned
+- Local fan-out short-circuit: deliver same-process broadcasts without the Mongo round-trip
+- Optional broadcast batching (`broadcast_buffer_ms`) for high-volume bulk publishing
+
+## [1.1.1] - 2026-05-29
 
 ### Changed
 - Memoize MongoDB replica set check to avoid repeated `hello`/`ismaster` commands; topology is checked once per process.
 - Remove redundant `logger` / `attr_reader :server` overrides that are now provided by Action Cable's `SubscriptionAdapter::Base`.
 - Update specs to fix flaky tests and reflect the new replica set validation behavior.
 - Update `.rubocop.yml` target Ruby version and fix a README typo.
+
+### Notes
 - Benchmarks executed locally; results indicate ~1.6k msg/s (w=1) and ~5k msg/s (w=0) on the benchmark host — see `benchmark/` for details.
 
-
-## [1.1.0.0] - 2025-02-25
+## [1.1.0] - 2025-02-25
 
 ### Added
 - **Dynamic Channel Filtering**: MongoDB-level filtering reduces network traffic by 50-95% in multi-channel scenarios
@@ -84,7 +59,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2025-02-09
 
-### Planned
-- Support for multiple MongoDB databases
-- Message compression options
-- Custom serialization support
+### Added
+- Initial release of SolidCableMongoidAdapter
+- MongoDB Change Streams support for real-time message delivery
+- Automatic TTL-based message expiration
+- Replica set requirement validation
+- Exponential backoff for reconnection attempts
+- Resume token support for continuity across reconnections
+- Fallback polling mode for standalone MongoDB
+- Comprehensive logging and error handling
+- Thread-safe listener implementation
+- Rails 7+ and Rails 8+ compatibility
+- Production-grade code quality and documentation
+
+### Features
+- Channel-based subscription management
+- Configurable message expiration (TTL)
+- Configurable reconnection delays with exponential backoff
+- Configurable polling parameters for fallback mode
+- Automatic collection and index creation
+- Fork-safe operation (Passenger, Puma cluster mode)
+
+### Configuration Options
+- `collection_name`: MongoDB collection name
+- `expiration`: Message TTL in seconds
+- `reconnect_delay`: Initial retry delay
+- `max_reconnect_delay`: Maximum retry delay
+- `poll_interval_ms`: Polling interval
+- `poll_batch_limit`: Max messages per poll
+- `require_replica_set`: Enforce replica set requirement
