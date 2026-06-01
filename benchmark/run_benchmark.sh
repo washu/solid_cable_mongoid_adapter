@@ -2,7 +2,10 @@
 # frozen_string_literal: false
 
 # Run benchmark with Docker MongoDB
-# Usage: ./benchmark/run_benchmark.sh
+# Usage:
+#   ./benchmark/run_benchmark.sh
+#   BENCHMARK_HIGH_VOLUME=true ./benchmark/run_benchmark.sh
+#   FANOUT_MESSAGES=1000 ./benchmark/run_benchmark.sh   # more messages per connection test
 
 set -e
 
@@ -10,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=== SolidCableMongoidAdapter Benchmark Runner ==="
+echo
+echo "Options (set via env):"
+echo "  BENCHMARK_HIGH_VOLUME=true   Run 100k message high-volume test"
+echo "  FANOUT_MESSAGES=N            Messages per connection-scale test (default: 500)"
 echo
 
 # Check if Docker is running
@@ -21,13 +28,13 @@ fi
 
 # Check if MongoDB container already exists
 if docker ps -a --format '{{.Names}}' | grep -q '^mongodb_benchmark$'; then
-    echo "📦 Stopping existing MongoDB benchmark container..."
+    echo " Stopping existing MongoDB benchmark container..."
     docker stop mongodb_benchmark > /dev/null 2>&1 || true
     docker rm mongodb_benchmark > /dev/null 2>&1 || true
 fi
 
 # Start MongoDB with replica set
-echo "🚀 Starting MongoDB replica set..."
+echo " Starting MongoDB replica set..."
 docker run -d \
     --name mongodb_benchmark \
     -p 27017:27017 \
@@ -40,7 +47,7 @@ echo "⏳ Waiting for MongoDB to start..."
 sleep 5
 
 # Initialize replica set
-echo "🔧 Initializing replica set..."
+echo " Initializing replica set..."
 docker exec mongodb_benchmark mongosh --eval \
     'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})' \
     > /dev/null 2>&1
@@ -60,13 +67,15 @@ fi
 echo
 
 # Run the benchmark
-echo "📊 Running benchmark..."
+echo " Running benchmark..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 
 cd "$PROJECT_DIR"
 MONGODB_URI="mongodb://localhost:27017/solid_cable_benchmark" \
-    bundle exec ruby benchmark/benchmark.rb
+  BENCHMARK_HIGH_VOLUME="${BENCHMARK_HIGH_VOLUME:-false}" \
+  FANOUT_MESSAGES="${FANOUT_MESSAGES:-500}" \
+  bundle exec ruby benchmark/benchmark.rb
 
 BENCHMARK_EXIT_CODE=$?
 
@@ -75,7 +84,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo
 
 # Cleanup
-echo "🧹 Cleaning up..."
+echo " Cleaning up..."
 docker stop mongodb_benchmark > /dev/null 2>&1
 docker rm mongodb_benchmark > /dev/null 2>&1
 

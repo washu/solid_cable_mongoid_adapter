@@ -67,15 +67,15 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
       adapter.broadcast("test", "payload")
     end
 
-    it "returns true on success" do
-      expect(adapter.broadcast("test", "payload")).to be true
+    it "does not raise on success" do
+      expect { adapter.broadcast("test", "payload") }.not_to raise_error
     end
 
-    it "returns false on error" do
+    it "raises on MongoDB error (rails/rails#50979)" do
       collection = adapter.collection
       allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(Mongo::Error::OperationFailure.new("test"))
-      expect(adapter.broadcast("test", "payload")).to be false
+      expect { adapter.broadcast("test", "payload") }.to raise_error(Mongo::Error::OperationFailure)
     end
   end
 
@@ -188,27 +188,27 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid do
   end
 
   describe "broadcast error handling" do
-    it "returns false on unexpected errors" do
+    it "raises on unexpected errors" do
       collection = adapter.collection
       allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(StandardError.new("unexpected"))
-      expect(adapter.broadcast("test", "payload")).to be false
+      expect { adapter.broadcast("test", "payload") }.to raise_error(StandardError, "unexpected")
     end
 
-    it "logs MongoDB errors" do
+    it "logs MongoDB errors before raising" do
       collection = adapter.collection
       allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(Mongo::Error::OperationFailure.new("test"))
       expect(server.logger).to receive(:error).with(/broadcast error/)
-      adapter.broadcast("test", "payload")
+      expect { adapter.broadcast("test", "payload") }.to raise_error(Mongo::Error::OperationFailure)
     end
 
-    it "logs unexpected errors" do
+    it "logs unexpected errors before raising" do
       collection = adapter.collection
       allow(adapter).to receive(:collection).and_return(collection)
       allow(collection).to receive(:insert_one).and_raise(StandardError.new("unexpected"))
       expect(server.logger).to receive(:error).with(/unexpected broadcast error/)
-      adapter.broadcast("test", "payload")
+      expect { adapter.broadcast("test", "payload") }.to raise_error(StandardError)
     end
   end
 end

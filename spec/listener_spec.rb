@@ -176,28 +176,104 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid::Listener do
     end
   end
 
-  describe "change stream handling" do
-    it "attempts to watch change streams" do
-      collection = adapter.collection
-      allow(adapter).to receive(:collection).and_return(collection)
+  describe "#build_pipeline" do
+    before { listener.shutdown }
 
-      # Simulate change stream creation
-      stream = double("stream")
-      allow(collection).to receive(:watch).and_return(stream)
-      allow(stream).to receive(:each)
+    it "returns a generic insert filter when no channels subscribed" do
+      pipeline = listener.send(:build_pipeline)
+      expect(pipeline).to eq([{ "$match" => { "operationType" => "insert" } }])
+    end
 
-      # Give the listener thread time to attempt watching
-      sleep 0.2
+    it "includes a channel $in filter when channels are subscribed" do
+      listener.add_subscriber("alpha", proc { |m| m }, nil)
+      listener.add_subscriber("beta", proc { |m| m }, nil)
+
+      pipeline = listener.send(:build_pipeline)
+      expect(pipeline.first).to eq("$match" => { "operationType" => "insert" })
+      channel_filter = pipeline.last.fetch("$match").fetch("fullDocument.channel").fetch("$in")
+      expect(channel_filter).to contain_exactly("alpha", "beta")
     end
   end
 
-  describe "polling fallback" do
-    it "has fallback mechanism when change streams unavailable" do
-      # This is a complex integration test that's hard to mock properly
-      # The polling logic is exercised in the background thread
-      # We just verify the listener thread is running
-      thread = listener.instance_variable_get(:@thread)
-      expect(thread).to be_alive
+  describe "stream restart triggers" do
+    before { listener.shutdown }
+
+    it "requests restart when a brand new channel is added" do
+      listener.send(:clear_restart_flag)
+      listener.add_subscriber("new_channel", proc { |m| m }, nil)
+      expect(listener.send(:restart_requested?)).to be true
+    end
+
+    it "does not request restart when subscribing to an existing channel" do
+      listener.add_subscriber("dup_channel", proc { |m| m }, nil)
+      listener.send(:clear_restart_flag)
+
+      listener.add_subscriber("dup_channel", proc { |m| m }, nil)
+      expect(listener.send(:restart_requested?)).to be false
+    end
+
+    it "requests restart only when the last subscriber leaves a channel" do
+      cb1 = proc { |m| m }
+      cb2 = proc { |m| m }
+      listener.add_subscriber("shared", cb1, nil)
+      listener.add_subscriber("shared", cb2, nil)
+      listener.send(:clear_restart_flag)
+
+      listener.remove_subscriber("shared", cb1)
+      expect(listener.send(:restart_requested?)).to be false
+
+      listener.remove_subscriber("shared", cb2)
+      expect(listener.send(:restart_requested?)).to be true
+    end
+  end
+
+  describe "#handle_insert_doc" do
+    before { listener.shutdown }
+
+    it "dispatches messages to subscribers of a matching channel" do
+      received = Queue.new
+      allow(event_loop).to receive(:post) { |&block| block.call }
+      listener.add_subscriber("inbox", ->(msg) { received << msg }, nil)
+
+      listener.send(:handle_insert_doc, "channel" => "inbox", "message" => "hi")
+      expect(received.pop).to eq("hi")
+    end
+
+    it "ignores messages for unsubscribed channels without mutating the subscriber map" do
+      allow(event_loop).to receive(:post)
+      listener.send(:handle_insert_doc, "channel" => "ghost", "message" => "n/a")
+
+      subscribers = listener.instance_variable_get(:@subscribers)
+      expect(subscribers.key?("ghost")).to be false
+    end
+
+    it "instruments message_error and logs when a callback raises" do
+      listener.add_subscriber("boom", ->(_) { raise "kaboom" }, nil)
+      allow(event_loop).to receive(:post) { |&block| block.call }
+
+      events = []
+      subscriber = ActiveSupport::Notifications.subscribe("message_error.solid_cable_mongoid") do |*args|
+        events << ActiveSupport::Notifications::Event.new(*args)
+      end
+
+      expect(adapter.logger).to receive(:error).with(/callback error/)
+      listener.send(:handle_insert_doc, "channel" => "boom", "message" => "x")
+
+      expect(events.size).to eq(1)
+      expect(events.first.payload).to include(channel: "boom")
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber) if subscriber
+    end
+
+    it "delivers to remaining subscribers when one callback raises" do
+      received = Queue.new
+      allow(event_loop).to receive(:post) { |&block| block.call }
+
+      listener.add_subscriber("partial", ->(_) { raise "bad" }, nil)
+      listener.add_subscriber("partial", ->(msg) { received << msg }, nil)
+
+      listener.send(:handle_insert_doc, "channel" => "partial", "message" => "ok")
+      expect(received.pop).to eq("ok")
     end
   end
 end

@@ -32,7 +32,7 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   # Runtime dependencies
-  spec.add_dependency "actioncable", ">= 7.0", "< 9.0"
+  spec.add_dependency "actioncable", ">= 7.0", "< 10.0"
   spec.add_dependency "mongo", ">= 2.18", "< 3.0"
   spec.add_dependency "mongoid", ">= 7.0", "< 10.0"
 end

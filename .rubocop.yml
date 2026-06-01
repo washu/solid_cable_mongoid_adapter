@@ -1,10 +1,12 @@
 AllCops:
   TargetRubyVersion: 2.7
   NewCops: enable
+  SuggestExtensions: false
   Exclude:
     - 'vendor/**/*'
     - 'bin/**/*'
     - 'tmp/**/*'
+    - 'benchmark/**/*'
 
 Style/Documentation:
   Enabled: false
