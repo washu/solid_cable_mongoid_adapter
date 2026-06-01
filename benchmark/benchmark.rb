@@ -43,7 +43,6 @@ Mongoid.configure do |config|
 end
 
 # Mock ActionCable Server
-# rubocop:disable Style/OneClassPerFile
 class MockServer
   attr_reader :logger, :config, :event_loop, :mutex
 
@@ -77,15 +76,14 @@ class MockConfig
     }
   end
 end
-# rubocop:enable Style/OneClassPerFile
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 # Pretty-print a number with comma separators
-def fmt(n)
-  n.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+def fmt(num)
+  num.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
 end
 
 # Run block, return elapsed seconds (monotonic clock)
@@ -223,8 +221,8 @@ puts "  Unsubscribe: #{(unsub_time * 1000).round(3)}ms"
 puts "\n--- Benchmark 6: Instrumentation Overhead ---"
 
 events = []
-notif_subscription = ActiveSupport::Notifications.subscribe(/solid_cable_mongoid/) do |name, start, finish, _id, _payload|
-  events << { name: name, duration: (finish - start) * 1000 }
+notif_subscription = ActiveSupport::Notifications.subscribe(/solid_cable_mongoid/) do |name, start, fin, _id, _payload|
+  events << { name: name, duration: (fin - start) * 1000 }
 end
 
 instr_count = 100
@@ -342,14 +340,14 @@ FANOUT_MESSAGES = ENV.fetch("FANOUT_MESSAGES", "200").to_i
 # so the pure in-process fan-out cost is identical.  These numbers are
 # included as a sanity reference, not a meaningful comparison.
 BASELINES = {
-  redis:    { 100 => 380_000, 1_000 => 120_000, 10_000 => 15_000 },
+  redis: { 100 => 380_000, 1_000 => 120_000, 10_000 => 15_000 },
   postgres: { 100 => 380_000, 1_000 => 120_000, 10_000 => 15_000 }
 }.freeze
 
 connection_counts = [100, 1_000, 10_000]
 fanout_results = {}
 
-connection_counts.each do |conn_count|
+connection_counts.each do |conn_count| # rubocop:disable Metrics/BlockLength
   puts "  ╔══ #{conn_count} subscribers ══════════════════════════════════"
 
   # ── Scenario A: Single channel ──────────────────────────────────────────
@@ -495,6 +493,7 @@ deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
 loop do
   break if e2e_mutex.synchronize { e2e_delivered } >= e2e_messages
   break if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
   sleep 0.05
 end
 
@@ -529,11 +528,16 @@ connection_counts.each do |conn_count|
   rb = fanout_results[conn_count][:unique]
   ref = BASELINES[:redis][conn_count]
 
-  puts format("  │ %-8s │ %14s | %7s │ %14s | %7s │ %16s │",
-              fmt(conn_count),
-              fmt(ra[:throughput]), "#{ra[:per_broadcast_ms]}ms",
-              fmt(rb[:throughput]), "#{rb[:per_broadcast_ms]}ms",
-              "~#{fmt(ref)}")
+  row = format(
+    "  │ %-8<subs>s │ %14<ath>s | %7<ams>s │ %14<bth>s | %7<bms>s │ %16<ref>s │",
+    subs: fmt(conn_count),
+    ath: fmt(ra[:throughput]),
+    ams: "#{ra[:per_broadcast_ms]}ms",
+    bth: fmt(rb[:throughput]),
+    bms: "#{rb[:per_broadcast_ms]}ms",
+    ref: "~#{fmt(ref)}"
+  )
+  puts row
 end
 
 puts "  └──────────┴──────────────────────────┴──────────────────────────┴──────────────────┘"
@@ -554,8 +558,8 @@ puts "Fan-out results (pure Ruby SubscriberMap dispatch):"
 connection_counts.each do |conn_count|
   ra = fanout_results[conn_count][:single]
   rb = fanout_results[conn_count][:unique]
-  puts "  #{fmt(conn_count)} subs │ single-ch: #{fmt(ra[:throughput])} del/s (#{ra[:delivered_pct]}% delivered)" \
-       " │ unique-ch: #{fmt(rb[:throughput])} del/s (#{rb[:delivered_pct]}% delivered)"
+  puts "  #{fmt(conn_count)} subs │ single-ch: #{fmt(ra[:throughput])} del/s (#{ra[:delivered_pct]}% delivered) " \
+       "│ unique-ch: #{fmt(rb[:throughput])} del/s (#{rb[:delivered_pct]}% delivered)"
 end
 
 # Cleanup
