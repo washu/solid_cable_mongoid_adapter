@@ -247,7 +247,7 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid::Listener do
       expect(subscribers.key?("ghost")).to be false
     end
 
-    it "instruments message_error and logs when dispatch raises" do
+    it "instruments message_error and logs when a callback raises" do
       listener.add_subscriber("boom", ->(_) { raise "kaboom" }, nil)
       allow(event_loop).to receive(:post) { |&block| block.call }
 
@@ -256,13 +256,24 @@ RSpec.describe ActionCable::SubscriptionAdapter::SolidMongoid::Listener do
         events << ActiveSupport::Notifications::Event.new(*args)
       end
 
-      expect(adapter.logger).to receive(:error).with(/failed to handle insert/)
+      expect(adapter.logger).to receive(:error).with(/callback error/)
       listener.send(:handle_insert_doc, "channel" => "boom", "message" => "x")
 
       expect(events.size).to eq(1)
       expect(events.first.payload).to include(channel: "boom")
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber) if subscriber
+    end
+
+    it "delivers to remaining subscribers when one callback raises" do
+      received = Queue.new
+      allow(event_loop).to receive(:post) { |&block| block.call }
+
+      listener.add_subscriber("partial", ->(_) { raise "bad" }, nil)
+      listener.add_subscriber("partial", ->(msg) { received << msg }, nil)
+
+      listener.send(:handle_insert_doc, "channel" => "partial", "message" => "ok")
+      expect(received.pop).to eq("ok")
     end
   end
 end
