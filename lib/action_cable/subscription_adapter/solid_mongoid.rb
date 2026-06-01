@@ -4,7 +4,6 @@ require "action_cable/subscription_adapter/base"
 require "action_cable/subscription_adapter/channel_prefix"
 require "action_cable/subscription_adapter/subscriber_map"
 require "mongoid"
-require "securerandom"
 
 module ActionCable
   module SubscriptionAdapter
@@ -149,7 +148,7 @@ module ActionCable
         rescue StandardError
           nil
         end
-        result = !!hello&.[]("setName")
+        result = hello&.[]("setName") ? true : false
         @replica_set_configured = true if result
         result
       rescue StandardError => e
@@ -322,39 +321,50 @@ module ActionCable
         end
 
         # Add a subscriber. Instrumentation fires per-subscribe; stream restart
-        # is triggered only when a brand new channel is joined (detected after
-        # @sync is released to avoid lock-order inversion with @stream_mutex).
+        # is triggered only when a brand new channel is joined.
+        #
+        # IMPORTANT: do not call @sync.synchronize here — SubscriberMap#add_subscriber
+        # already holds @sync when it calls add_channel. A second lock attempt on the
+        # same plain Mutex from the same thread raises ThreadError (deadlock).
+        # Instead, add_channel sets a thread-local sentinel that we read here after
+        # super returns (i.e. after @sync is released).
         def add_subscriber(channel, callback, success_callback = nil)
-          new_channel = !@sync.synchronize { @subscribers.key?(channel) }
+          Thread.current[:solid_cable_new_channel] = false
           super
-          request_stream_restart if new_channel
+          request_stream_restart if Thread.current[:solid_cable_new_channel]
           ActiveSupport::Notifications.instrument("subscribe.solid_cable_mongoid",
                                                   channel: channel,
                                                   total_channels: channels_snapshot.size)
         end
 
         # Remove a subscriber. Stream restart is triggered only when the last
-        # subscriber leaves a channel (detected after @sync is released).
+        # subscriber leaves a channel.
+        #
+        # Same reasoning as add_subscriber — do not re-enter @sync here.
+        # remove_channel sets a thread-local sentinel read after super returns.
         def remove_subscriber(channel, callback)
-          was_last = @sync.synchronize { @subscribers[channel]&.size == 1 }
+          Thread.current[:solid_cable_removed_channel] = false
           super
-          request_stream_restart if was_last
+          request_stream_restart if Thread.current[:solid_cable_removed_channel]
           ActiveSupport::Notifications.instrument("unsubscribe.solid_cable_mongoid",
                                                   channel: channel,
                                                   total_channels: channels_snapshot.size)
         end
 
         # Called by SubscriberMap when a brand new channel is added (runs under @sync).
-        # Stream restart is now triggered from add_subscriber AFTER @sync is released
-        # to prevent lock-order inversion with @stream_mutex.
+        # Sets a thread-local flag so add_subscriber knows to request a stream restart
+        # once @sync is released. # -- side-effect: sets thread-local flag
         def add_channel(channel, on_success)
           super
+          Thread.current[:solid_cable_new_channel] = true
         end
 
         # Called by SubscriberMap when the last subscriber leaves a channel (runs under @sync).
-        # Stream restart is now triggered from remove_subscriber AFTER @sync is released.
+        # Sets a thread-local flag so remove_subscriber knows to request a stream restart
+        # once @sync is released.
         def remove_channel(channel)
           super
+          Thread.current[:solid_cable_removed_channel] = true
         end
 
         # Graceful shutdown with configurable timeout.
@@ -441,51 +451,7 @@ module ActionCable
           while @running
             begin
               if change_stream_supported?
-                # Build pipeline with current channel subscriptions for filtering
-                pipeline = build_pipeline
-
-                # Change Stream path (replica set / sharded)
-                opts = { max_await_time_ms: @max_await_time_ms }
-                opts[:resume_after] = @resume_token if @resume_token
-
-                @stream = @collection.watch(pipeline, opts)
-                enum = @stream.to_enum
-
-                @adapter.logger.debug "SolidCableMongoid: watching #{channels_snapshot.size} channel(s)"
-
-                batch = []
-                while @running && enum && !restart_requested?
-                  doc = enum.try_next
-
-                  if doc
-                    batch << (doc["fullDocument"] || {})
-                    @resume_token = @stream.resume_token
-                    @reconnect_attempts = 0 # Reset on successful iteration
-                  end
-
-                  # Flush batch when it has items and no more docs are immediately available
-                  # (doc == nil means the await window expired — good flush point)
-                  if batch.any? && doc.nil?
-                    dispatched = batch.dup
-                    batch.clear
-                    @event_loop.post { handle_insert_docs(dispatched) }
-                  end
-                end
-
-                # Flush any remaining docs before restarting
-                if batch.any?
-                  dispatched = batch.dup
-                  batch.clear
-                  @event_loop.post { handle_insert_docs(dispatched) }
-                end
-
-                # Handle stream restart request
-                if restart_requested?
-                  @adapter.logger.debug "SolidCableMongoid: restarting stream with updated channel filter"
-                  clear_restart_flag
-                  close_stream
-                  next # Restart loop with new pipeline
-                end
+                run_change_stream
               else
                 # Standalone fallback: polling
                 poll_for_inserts
@@ -517,6 +483,44 @@ module ActionCable
           end
         end
 
+        # Open and drain a Change Stream, dispatching batches to subscribers.
+        # Returns normally when a stream restart is requested or @running becomes false.
+        # Raises on MongoDB errors so listen_loop's rescue chain handles backoff.
+        #
+        # @return [void]
+        def run_change_stream
+          pipeline = build_pipeline
+          opts = { max_await_time_ms: @max_await_time_ms }
+          opts[:resume_after] = @resume_token if @resume_token
+
+          @stream = @collection.watch(pipeline, opts)
+          enum = @stream.to_enum
+
+          @adapter.logger.debug "SolidCableMongoid: watching #{channels_snapshot.size} channel(s)"
+
+          batch = []
+          while @running && enum && !restart_requested?
+            doc = enum.try_next
+
+            if doc
+              batch << (doc["fullDocument"] || {})
+              @resume_token = @stream.resume_token
+              @reconnect_attempts = 0
+            end
+
+            # doc == nil means the await window expired — flush whatever we have
+            flush_batch(batch) if batch.any? && doc.nil?
+          end
+
+          flush_batch(batch) if batch.any?
+
+          return unless restart_requested?
+
+          @adapter.logger.debug "SolidCableMongoid: restarting stream with updated channel filter"
+          clear_restart_flag
+          close_stream
+        end
+
         # Sleep with exponential backoff.
         def sleep_with_backoff
           delay = reconnect_delay
@@ -540,6 +544,16 @@ module ActionCable
         # @return [Boolean]
         def change_stream_supported?
           @adapter.replica_set_configured?
+        end
+
+        # Post a completed batch to the event loop and clear it.
+        #
+        # @param batch [Array<Hash>] mutable batch array; cleared in place
+        # @return [void]
+        def flush_batch(batch)
+          dispatched = batch.dup
+          batch.clear
+          @event_loop.post { handle_insert_docs(dispatched) }
         end
 
         # Poll for newly inserted broadcast documents when Change Streams are unavailable.
@@ -600,7 +614,7 @@ module ActionCable
           # (SubscriberMap uses a Hash.new { |h,k| h[k] = [] } default).
           list = @sync.synchronize do
             cbs = @subscribers.fetch(channel, nil)
-            (cbs.nil? || cbs.empty?) ? nil : cbs.dup
+            cbs.nil? || cbs.empty? ? nil : cbs.dup
           end
           return unless list
 
@@ -610,7 +624,9 @@ module ActionCable
             list.each do |cb|
               invoke_callback(cb, message)
             rescue StandardError => e
-              @adapter.logger.error "SolidCableMongoid: callback error on channel #{channel.inspect} (#{e.class}): #{e.message}"
+              err_msg = "SolidCableMongoid: callback error on channel #{channel.inspect} " \
+                        "(#{e.class}): #{e.message}"
+              @adapter.logger.error err_msg
               ActiveSupport::Notifications.instrument("message_error.solid_cable_mongoid",
                                                       channel: channel, error: e.class.name)
             end
