@@ -164,12 +164,12 @@ The `write_concern` option controls MongoDB's write acknowledgment behavior:
 **write_concern: 1 (Default - Recommended)**
 - MongoDB acknowledges writes
 - Guarantees message persistence
-- Throughput: ~540 msg/sec
+- Throughput: ~1,300 msg/sec (local replica set)
 - **Use for**: Production, critical messages, reliable delivery
 
 **write_concern: 0 (High-Performance)**
 - Fire-and-forget, no acknowledgment
-- 4-9x faster throughput (~2000-5000 msg/sec)
+- ~4x faster throughput (~5,100 msg/sec)
 - **Trade-off**: Silent failures, potential message loss
 - **Use for**: High-volume ephemeral data (chat, presence, typing indicators)
 
@@ -192,8 +192,8 @@ production_high_volume:
 
 | Write Concern | Throughput | Latency | Use Case |
 |---------------|------------|---------|----------|
-| w=1 (default) | ~540 msg/sec | ~1.8ms | Critical messages, guaranteed delivery |
-| w=0 (fast) | ~2000+ msg/sec | ~0.3ms | Chat, presence, ephemeral updates |
+| w=1 (default) | ~1,300 msg/sec | ~0.79ms | Critical messages, guaranteed delivery |
+| w=0 (fast) | ~5,100 msg/sec | ~0.19ms | Chat, presence, ephemeral updates |
 
 See [Benchmark 7](#benchmarks) for detailed performance comparison.
 
@@ -214,23 +214,47 @@ Run the included benchmark suite to measure performance on your system:
 bundle exec ruby benchmark/benchmark.rb
 ```
 
-**Typical Results** (M1 Mac, MongoDB 7.0, local replica set):
+**Typical Results** (Apple M-series, MongoDB 7.0, local single-node replica set, Ruby 3.4):
 
-| Metric | Value |
-|--------|-------|
-| Broadcast latency (100B) | ~1-2ms avg, <3ms p95 |
-| Broadcast latency (1KB) | ~2ms avg, <4ms p95 |
-| Broadcast latency (10KB) | ~2-3ms avg, <4ms p95 |
-| Broadcast latency (100KB) | ~4-5ms avg, <6ms p95 |
-| Throughput (10k messages) | 500-600 messages/sec |
-| Throughput (100k messages) | 400-500 messages/sec (optional test) |
-| Subscribe/Unsubscribe | <1ms |
-| Instrumentation overhead | ~2ms per event |
+| Benchmark | Metric | Result |
+|-----------|--------|--------|
+| Broadcast latency (100B) | avg / p95 | 1.2ms / 1.6ms |
+| Broadcast latency (1KB) | avg / p95 | 0.91ms / 1.3ms |
+| Broadcast latency (10KB) | avg / p95 | 0.93ms / 1.5ms |
+| Broadcast latency (100KB) | avg / p95 | 3.1ms / 4.1ms |
+| Throughput — w=1 (10k msgs) | msg/sec | ~1,300 |
+| Throughput — w=0 (5k msgs) | msg/sec | ~5,100 |
+| Write concern speedup | w=0 vs w=1 | **4x faster, 75% lower latency** |
+| Subscribe / Unsubscribe | ms | < 1ms |
+| Instrumentation overhead | avg per event | ~0.83ms |
+| End-to-end delivery (Change Streams) | 5 messages | ~114ms |
+
+**Fan-out Performance** (pure Ruby `SubscriberMap` dispatch — no MongoDB round-trip):
+
+| Subscribers | Single channel | Unique channels | Redis/PG (ref) |
+|-------------|---------------|-----------------|----------------|
+| 100 | 3,501,401 del/s · 0.029ms/bcast | 1,344,086 del/s · 0.001ms/bcast | ~380,000 |
+| 1,000 | 3,702,223 del/s · 0.27ms/bcast | 1,344,086 del/s · 0.001ms/bcast | ~120,000 |
+| 10,000 | 3,609,121 del/s · 2.8ms/bcast | 1,424,502 del/s · 0.001ms/bcast | ~15,000 |
+
+> **Note on fan-out numbers**: all three adapters (MongoDB, Redis, Postgres) share the same ActionCable
+> `SubscriberMap` dispatch code. The numbers above measure that shared in-process path with zero I/O.
+> End-to-end throughput is lower because each adapter adds its own broadcast delivery latency
+> (Change Stream, PubSub, or LISTEN/NOTIFY round-trip).
+
+**Unique-channel fan-out stays O(1) regardless of total subscriber count** — each broadcast dispatches
+exactly one callback, and the hash-map lookup is constant time even at 10,000 registered channels.
+This is the recommended pattern for private user channels (`user:123`).
 
 **High-Volume Test:**
 ```bash
 # Run with 100k messages (takes 2-5 minutes)
 BENCHMARK_HIGH_VOLUME=true ./benchmark/run_benchmark.sh
+```
+
+**Custom fan-out message count:**
+```bash
+FANOUT_MESSAGES=2000 ./benchmark/run_benchmark.sh
 ```
 
 **Channel Filtering Impact:**
@@ -239,6 +263,18 @@ BENCHMARK_HIGH_VOLUME=true ./benchmark/run_benchmark.sh
 |----------|------------------|----------------|-------------|
 | 100 channels, subscribe to 10 | 100% traffic | 10% traffic | 90% reduction |
 | 1000 channels, subscribe to 50 | 100% traffic | 5% traffic | 95% reduction |
+
+The adapter filters by channel at the SubscriberMap level — only subscribers registered to the
+specific channel receive a message. Each change-stream event is dispatched in O(1) to that
+channel's callback list.
+
+**Benchmark Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MONGODB_URI` | `mongodb://localhost:27017/solid_cable_benchmark` | MongoDB connection for benchmarks |
+| `BENCHMARK_HIGH_VOLUME` | `false` | Set `true` to run 100k-message throughput test |
+| `FANOUT_MESSAGES` | `500` | Messages per fan-out round in Benchmark 8 |
 
 ### Monitoring with ActiveSupport::Notifications
 
